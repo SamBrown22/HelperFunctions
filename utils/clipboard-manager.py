@@ -1,6 +1,6 @@
+import itertools
 import tkinter as tk
 from pymongo import MongoClient
-
 
 #client = MongoClient("mongodb+srv://samuelstevenbrown_db_user:AP4ZAtZa2IudGZeA@clipboardhistory.k5hds3x.mongodb.net/?appName=ClipBoardHistory")
 #db = client.Clipboard_history
@@ -18,10 +18,14 @@ clipboard_history = {}
 def save_clipboard():
     try:
         text = root.clipboard_get()
-        if text:
-            if text in clipboard_history:
-                del clipboard_history[text]
-            clipboard_history[text] = True
+        text_single_line = " ".join(text.splitlines())
+        current_clipboard.set(
+            f"{text_single_line[:50]}{'...' if len(text_single_line) > 50 else ''}"
+        )
+        if text_single_line:
+            if text_single_line in clipboard_history:
+                del clipboard_history[text_single_line]
+            clipboard_history[text_single_line] = True
             update_listbox()
     except:
         pass
@@ -32,10 +36,11 @@ def update_listbox():
         selected_index = listbox.curselection()[0]
         selected_value = listbox.get(selected_index)
     except IndexError:
-        selected_value = None  # Nothing selected
+        selected_value = None 
 
     listbox.delete(0, tk.END)
-    for key in reversed(clipboard_history):
+
+    for key in itertools.islice(reversed(clipboard_history), 1, None):
         listbox.insert(tk.END, key)
 
     if selected_value in listbox.get(0, tk.END):
@@ -58,7 +63,7 @@ def clear_history():
 # --- UI Setup ---
 root = tk.Tk()
 root.title("Clipboard Manager")
-root.geometry("450x400")
+root.geometry("500x500")
 root.configure(bg=BG)
 root.resizable(False, False)
 
@@ -78,6 +83,35 @@ title.pack()
 # Center frame (listbox)
 center_frame = tk.Frame(root, bg=BG)
 center_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+current_clipboard = tk.StringVar()
+
+current_frame = tk.LabelFrame(
+    center_frame,
+    text="Current Clipboard",
+    bg=BG,
+    fg=FG,
+    font=("Segoe UI", 9, "bold"),
+    labelanchor="nw",
+    bd=0,
+    relief="solid",
+)
+current_frame.pack(fill=tk.X, pady=10, anchor="w")
+
+current_clipboard_entry = tk.Label(
+    current_frame,
+    textvariable=current_clipboard,
+    bg=BOX,
+    fg=FG,
+    font=("Consolas", 10),
+    anchor="w",
+    justify="left",
+    bd=0,
+    padx=8,
+    pady=6,
+    wraplength=400,
+)
+current_clipboard_entry.pack(fill=tk.BOTH, expand=True)
 
 listbox = tk.Listbox(
     center_frame,
