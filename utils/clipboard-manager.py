@@ -18,18 +18,30 @@ clipboard_history = {}
 def save_clipboard():
     try:
         text = root.clipboard_get()
-        if text and text not in clipboard_history:
+        if text:
+            if text in clipboard_history:
+                del clipboard_history[text]
             clipboard_history[text] = True
-            update_listbox(text)
-        elif text in clipboard_history:
-            highlight_selected(text)
+            update_listbox()
     except:
         pass
     root.after(1000, save_clipboard)
 
-def update_listbox(text):
-    listbox.insert(0, text)
-    show_selected(text)
+def update_listbox():
+    try:
+        selected_index = listbox.curselection()[0]
+        selected_value = listbox.get(selected_index)
+    except IndexError:
+        selected_value = None  # Nothing selected
+
+    listbox.delete(0, tk.END)
+    for key in reversed(clipboard_history):
+        listbox.insert(tk.END, key)
+
+    if selected_value in listbox.get(0, tk.END):
+        index = listbox.get(0, tk.END).index(selected_value)
+        listbox.selection_set(index)
+        listbox.activate(index)
 
 def copy_selected():
     try:
@@ -42,14 +54,6 @@ def copy_selected():
 def clear_history():
     clipboard_history.clear()
     update_listbox()
-
-def show_selected(key):
-    all_items = listbox.get(0, tk.END)
-    if key in all_items:
-        index = all_items.index(key)
-        listbox.selection_clear(0, tk.END)
-        listbox.selection_set(index)
-        listbox.activate(index)
 
 # --- UI Setup ---
 root = tk.Tk()
