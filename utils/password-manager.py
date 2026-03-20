@@ -67,6 +67,26 @@ def refresh_list():
             else:
                 table.insert("", "end", iid=entry, values=(entry, data['username'], data['password'], data['url']), tags=("oddrow",))
 
+# Event Handlers
+def on_table_click(event):
+    row_id = table.identify_row(event.y)
+    col_id = table.identify_column(event.x)
+
+    if not row_id:
+        return
+
+    name, username, password, url = table.item(row_id, "values")
+
+    if col_id == "#2":
+        root.clipboard_clear()
+        root.clipboard_append(username)
+        print("Copied username:", username)
+
+    elif col_id == "#3":
+        root.clipboard_clear()
+        root.clipboard_append(password)
+        print("Copied password:", password)
+
 # GUI Functions
 def open_add_window():
     add_win = tk.Toplevel(root)
@@ -106,7 +126,7 @@ def open_add_window():
     tk.Button(add_win, text="Save Entry", bg=ACCENT, fg=FG, command=save_entry).pack(pady=10)
 
 def password_prompt():
-    prompt_win = tk.Toplevel(root)
+    prompt_win = tk.Tk()
     prompt_win.title("Enter Master Password")
     prompt_win.geometry("300x150")
     prompt_win.configure(bg=BG)
@@ -126,10 +146,10 @@ def password_prompt():
 
     tk.Button(prompt_win, text="Submit", bg=ACCENT, fg=FG, command=check_password).pack(pady=10)
 
-    root.wait_window(prompt_win)
+    prompt_win.mainloop()
 
 def create_master_password():
-    create_win = tk.Toplevel(root)
+    create_win = tk.Tk()
     create_win.title("Create Master Password")
     create_win.geometry("300x150")
     create_win.configure(bg=BG)
@@ -148,92 +168,74 @@ def create_master_password():
 
     tk.Button(create_win, text="Create", bg=ACCENT, fg=FG, command=save_master).pack(pady=10)
 
-# Event Handlers
-def on_table_click(event):
-    row_id = table.identify_row(event.y)
-    col_id = table.identify_column(event.x)
+    create_win.mainloop()
 
-    if not row_id:
-        return
+def create_password_manager():
+    global root, table #Make them accessible in other functions
 
-    name, username, password, url = table.item(row_id, "values")
+    root = tk.Tk()
+    root.title("Password Manager")
+    root.geometry("500x400")
+    root.configure(bg=BG)
 
-    if col_id == "#2":
-        root.clipboard_clear()
-        root.clipboard_append(username)
-        print("Copied username:", username)
+    top_frame = tk.Frame(root, bg=BG)
+    center_frame = tk.Frame(root, bg=BG)
+    bottom_frame = tk.Frame(root, bg=BG)
 
-    elif col_id == "#3":
-        root.clipboard_clear()
-        root.clipboard_append(password)
-        print("Copied password:", password)
+    top_frame.pack(pady=10)
+    center_frame.pack(pady=10)
+    bottom_frame.pack(pady=10)
 
-# -----------------------------
-# Main Window
-# -----------------------------
-root = tk.Tk()
-root.title("Password Manager")
-root.geometry("500x400")
-root.configure(bg=BG)
+    # Label Configurations
+    title_label = tk.Label(top_frame, text="🔒 Password Manager", font=("Segoe UI", 16), bg=BG, fg=FG)
+    title_label.pack()
 
-top_frame = tk.Frame(root, bg=BG)
-center_frame = tk.Frame(root, bg=BG)
-bottom_frame = tk.Frame(root, bg=BG)
+    list_label = tk.Label(center_frame, text="Saved Entries", bg=BG, fg=FG)
+    list_label.pack()
 
-top_frame.pack(pady=10)
-center_frame.pack(pady=10)
-bottom_frame.pack(pady=10)
+    # Main Listing Configurations
+    table = ttk.Treeview(center_frame, columns=("Name", "Username", "Password", "URL"), show="headings", height=10)
 
-# Label Configurations
-title_label = tk.Label(top_frame, text="🔒 Password Manager", font=("Segoe UI", 16), bg=BG, fg=FG)
-title_label.pack()
+    style = ttk.Style()
+    style.configure("Treeview", background=BOX, foreground=FG, fieldbackground=BOX, rowheight=25)
+    style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", FG)])
 
-list_label = tk.Label(center_frame, text="Saved Entries", bg=BG, fg=FG)
-list_label.pack()
+    table.column("Name", width=150, stretch=tk.NO)
+    table.column("Username", width=150, anchor=tk.W)    
+    table.column("Password", width=150, anchor=tk.W)
+    table.column("URL", width=200, anchor=tk.W)
 
-# Main Listing Configurations
+    table.heading("Name", text="Name", anchor=tk.W)
+    table.heading("Username", text="Username", anchor=tk.W)
+    table.heading("Password", text="Password", anchor=tk.W)
+    table.heading("URL", text="URL", anchor=tk.W)
 
-table = ttk.Treeview(center_frame, columns=("Name", "Username", "Password", "URL"), show="headings", height=10)
+    table.tag_configure("oddrow", background="#E8E8E8")
+    table.tag_configure("evenrow", background='#FFFFFF')
 
-style = ttk.Style()
-style.configure("Treeview", background=BOX, foreground=FG, fieldbackground=BOX, rowheight=25)
-style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", FG)])
+    table.bind("<Button-3>", on_table_click)
 
-table.column("Name", width=150, stretch=tk.NO)
-table.column("Username", width=150, anchor=tk.W)    
-table.column("Password", width=150, anchor=tk.W)
-table.column("URL", width=200, anchor=tk.W)
+    table.pack()
 
-table.heading("Name", text="Name", anchor=tk.W)
-table.heading("Username", text="Username", anchor=tk.W)
-table.heading("Password", text="Password", anchor=tk.W)
-table.heading("URL", text="URL", anchor=tk.W)
+    # Button Configurations
 
-table.tag_configure("oddrow", background="#E8E8E8")
-table.tag_configure("evenrow", background='#FFFFFF')
+    add_btn = tk.Button(root, text="Add Entry", bg=ACCENT, fg=FG, command=open_add_window)
+    add_btn.pack(pady=10, side=tk.LEFT, padx=20)
 
-table.bind("<Button-3>", on_table_click)
-
-table.pack()
-
-# Button Configurations
-
-add_btn = tk.Button(root, text="Add Entry", bg=ACCENT, fg=FG, command=open_add_window)
-add_btn.pack(pady=10, side=tk.LEFT, padx=20)
-
-delete_btn = tk.Button(root, text="Delete Selected", bg=ACCENT, fg=FG, command=delete_entry)
-delete_btn.pack(pady=5, side=tk.RIGHT, padx=20)
+    delete_btn = tk.Button(root, text="Delete Selected", bg=ACCENT, fg=FG, command=delete_entry)
+    delete_btn.pack(pady=5, side=tk.RIGHT, padx=20)
 
 # MAIN LOGIC
 if not os.path.exists("./data/config.json"):
     create_master_password()
-else:
-    with open("./data/config.json", "r") as f:
-        config = json.load(f)
-        hashed_password = config.get("hash-password", "")
-    password_prompt()
+
+with open("./data/config.json", "r") as f:
+    config = json.load(f)
+    hashed_password = config.get("hash-password", "")
+password_prompt()
 
 if verified:
+    create_password_manager()
     try:
         read_entries()
         refresh_list()
