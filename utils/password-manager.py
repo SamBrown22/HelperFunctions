@@ -2,7 +2,8 @@ import json
 import os
 import tkinter as tk
 import bcrypt
-from tkinter import ttk\
+from tkinter import ttk
+from tkinter import messagebox
 
 # Colors for theme
 BG = "#1e1e2e"
@@ -142,6 +143,7 @@ def password_prompt():
             verified = True
             prompt_win.destroy()
         else:
+            messagebox.showerror("Error", "Incorrect password")
             print("Incorrect password")
 
     tk.Button(prompt_win, text="Submit", bg=ACCENT, fg=FG, command=check_password).pack(pady=10)
