@@ -1,11 +1,13 @@
 import json
 import os
+import base64
 import tkinter as tk
 import bcrypt
 import cryptography
 from tkinter import ttk
 from tkinter import messagebox
-from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 # Colors for theme
 BG = "#1e1e2e"
@@ -16,6 +18,7 @@ BOX = "#2c2c3a"
 
 entries = {}
 verified = False
+master_password = None
 
 # Security Functions
 def hash_password(password):
@@ -31,32 +34,57 @@ def create_config(hashed_password):
     if not os.path.exists("./data/config.json"):
         with open("./data/config.json", "w") as f:
             json.dump({"hash-password": hashed_password}, f)
-        generate_key()
 
-def generate_key():
-    key = Fernet.generate_key()
-    with open("./data/key.key", "wb") as key_file:
-        key_file.write(key)
-    
-def load_key():
-    return open("./data/key.key", "rb").read()
+def derive_key(password: str, salt: bytes):
+    kdf = Scrypt(
+        salt=salt,
+        length=32,
+        n=2**14,
+        r=8,
+        p=1,
+    )
+    return kdf.derive(password.encode())
 
-def encrypt_data(data):
-    key = load_key()
-    f = Fernet(key)
-    return f.encrypt(data.encode())
+# Encrypt
+def encrypt(data: str):
+    global master_password
+    if not master_password:
+        raise ValueError("Master password is not set")
 
-def decrypt_data(data):
-    key = load_key()
-    f = Fernet(key)
-    return f.decrypt(data.encode()).decode()
+    salt = os.urandom(16)
+    key = derive_key(master_password, salt)
+
+    aesgcm = AESGCM(key)
+    nonce = os.urandom(12)
+
+    ciphertext = aesgcm.encrypt(nonce, data.encode(), None)
+
+    # Store salt + nonce + ciphertext together
+    return base64.b64encode(salt + nonce + ciphertext).decode()
+
+# Decrypt
+def decrypt(token: str):
+    global master_password
+    if not master_password:
+        raise ValueError("Master password is not set")
+
+    raw = base64.b64decode(token)
+
+    salt = raw[:16]
+    nonce = raw[16:28]
+    ciphertext = raw[28:]
+
+    key = derive_key(master_password, salt)
+
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(nonce, ciphertext, None).decode()
 
 
 # Data Management Functions
 def write_entries():
-    encrypted_data = {name: {'username': encrypt_data(data['username']).decode(),
-                            'password': encrypt_data(data['password']).decode(),
-                            'url': encrypt_data(data['url']).decode()} for name, data in entries.items()}
+    encrypted_data = {name: {'username': encrypt(data['username']),
+                            'password': encrypt(data['password']),
+                            'url': encrypt(data['url'])} for name, data in entries.items()}
     os.makedirs("./data", exist_ok=True)
     with open("./data/passwords.json", "w") as f:
         json.dump(encrypted_data, f)
@@ -66,9 +94,9 @@ def read_entries():
     try:
         with open("./data/passwords.json", "r") as f:
             encrypt_data = json.load(f)
-            entries = {name: {'username': decrypt_data(data['username']),   
-                              'password': decrypt_data(data['password']), 
-                              'url': decrypt_data(data['url'])} for name, data in encrypt_data.items()}
+            entries = {name: {'username': decrypt(data['username']),   
+                              'password': decrypt(data['password']), 
+                              'url': decrypt(data['url'])} for name, data in encrypt_data.items()}
     except FileNotFoundError:
         entries = {}
 
@@ -166,8 +194,9 @@ def password_prompt():
 
     def check_password():
         entered = pass_e.get().strip()
+        global verified, master_password
         if verify_password(entered, hashed_password):
-            global verified
+            master_password = entered
             verified = True
             prompt_win.destroy()
         else:
@@ -189,10 +218,11 @@ def create_master_password():
     pass_e.pack()
 
     def save_master():
-        global hashed_password
+        global hashed_password, master_password
         entered = pass_e.get().strip()
         if entered:
             hashed_password = hash_password(entered)
+            master_password = entered
             create_config(hashed_password)
             create_win.destroy()
 
