@@ -2,12 +2,15 @@ import json
 import os
 import tkinter as tk
 import bcrypt
+import cryptography
 from tkinter import ttk
 from tkinter import messagebox
+from cryptography.fernet import Fernet
 
 # Colors for theme
 BG = "#1e1e2e"
 FG = "#ffffff"
+TABLE_FG = "#000000"  # Table text color
 ACCENT = "#6c5ce7"
 BOX = "#2c2c3a"
 
@@ -28,19 +31,44 @@ def create_config(hashed_password):
     if not os.path.exists("./data/config.json"):
         with open("./data/config.json", "w") as f:
             json.dump({"hash-password": hashed_password}, f)
+        generate_key()
+
+def generate_key():
+    key = Fernet.generate_key()
+    with open("./data/key.key", "wb") as key_file:
+        key_file.write(key)
+    
+def load_key():
+    return open("./data/key.key", "rb").read()
+
+def encrypt_data(data):
+    key = load_key()
+    f = Fernet(key)
+    return f.encrypt(data.encode())
+
+def decrypt_data(data):
+    key = load_key()
+    f = Fernet(key)
+    return f.decrypt(data.encode()).decode()
+
 
 # Data Management Functions
-
 def write_entries():
+    encrypted_data = {name: {'username': encrypt_data(data['username']).decode(),
+                            'password': encrypt_data(data['password']).decode(),
+                            'url': encrypt_data(data['url']).decode()} for name, data in entries.items()}
     os.makedirs("./data", exist_ok=True)
     with open("./data/passwords.json", "w") as f:
-        json.dump(entries, f)
+        json.dump(encrypted_data, f)
 
 def read_entries():
     global entries
     try:
         with open("./data/passwords.json", "r") as f:
-            entries = json.load(f)
+            encrypt_data = json.load(f)
+            entries = {name: {'username': decrypt_data(data['username']),   
+                              'password': decrypt_data(data['password']), 
+                              'url': decrypt_data(data['url'])} for name, data in encrypt_data.items()}
     except FileNotFoundError:
         entries = {}
 
@@ -177,7 +205,7 @@ def create_password_manager():
 
     root = tk.Tk()
     root.title("Password Manager")
-    root.geometry("500x400")
+    root.geometry("600x600")
     root.configure(bg=BG)
 
     top_frame = tk.Frame(root, bg=BG)
@@ -199,7 +227,8 @@ def create_password_manager():
     table = ttk.Treeview(center_frame, columns=("Name", "Username", "Password", "URL"), show="headings", height=10)
 
     style = ttk.Style()
-    style.configure("Treeview", background=BOX, foreground=FG, fieldbackground=BOX, rowheight=25)
+    style.configure("Treeview", background=BOX, foreground=TABLE_FG, fieldbackground=BOX, rowheight=25)
+    style.configure("Treeview.Heading", background=BOX, foreground=TABLE_FG)
     style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", FG)])
 
     table.column("Name", width=150, stretch=tk.NO)
@@ -212,8 +241,8 @@ def create_password_manager():
     table.heading("Password", text="Password", anchor=tk.W)
     table.heading("URL", text="URL", anchor=tk.W)
 
-    table.tag_configure("oddrow", background="#E8E8E8")
-    table.tag_configure("evenrow", background='#FFFFFF')
+    table.tag_configure("oddrow", background="#DDDCDC")
+    table.tag_configure("evenrow", background="#CDCDCD")
 
     table.bind("<Button-3>", on_table_click)
 
@@ -245,8 +274,7 @@ if verified:
         print("Error loading entries:", e)
 
     root.mainloop()
-
-    if root.protocol("WM_DELETE_WINDOW", lambda: (write_entries(), root.destroy())):
-        pass
+    write_entries()
+    root.destroy()
 else:
     root.destroy()
