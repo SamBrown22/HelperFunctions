@@ -1,130 +1,134 @@
-import json
+import tkinter as tk
+from tkinter import ttk, messagebox
+import requests
 import os
 import base64
-import tkinter as tk
-import bcrypt
-import cryptography
-from tkinter import ttk
-from tkinter import messagebox
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-# Colors for theme
+# region Colors and Globals
 BG = "#1e1e2e"
 FG = "#ffffff"
-TABLE_FG = "#000000"  # Table text color
-ACCENT = "#6c5ce7"
 BOX = "#2c2c3a"
+ACCENT = "#6c5ce7"
+TABLE_FG = "#000000"
 
+user_key = None
+session_id = None
 entries = {}
-verified = False
-master_password = None
+# endregion
 
-# Security Functions
-def hash_password(password):
-    salt = bcrypt.gensalt()
-    hashed = bcrypt.hashpw(password.encode(), salt)
-    return hashed.decode()
-
-def verify_password(password, hashed):
-    return bcrypt.checkpw(password.encode(), hashed.encode())
-
-def create_config(hashed_password):
-    os.makedirs("./data", exist_ok=True)
-    if not os.path.exists("./data/config.json"):
-        with open("./data/config.json", "w") as f:
-            json.dump({"hash-password": hashed_password}, f)
-
-def derive_key(password: str, salt: bytes):
+# region Encryption functions
+def derive_key(password, salt):
+    if isinstance(password, str):
+        password = password.encode()
     kdf = Scrypt(
         salt=salt,
         length=32,
         n=2**14,
         r=8,
-        p=1,
+        p=1
     )
-    return kdf.derive(password.encode())
+    return kdf.derive(password)
 
-# Encrypt
-def encrypt(data: str):
-    global master_password
-    if not master_password:
-        raise ValueError("Master password is not set")
-
+def encrypt(data: str, key):
     salt = os.urandom(16)
-    key = derive_key(master_password, salt)
-
-    aesgcm = AESGCM(key)
+    key_for_aes = derive_key(key, salt)
+    aesgcm = AESGCM(key_for_aes)
     nonce = os.urandom(12)
-
     ciphertext = aesgcm.encrypt(nonce, data.encode(), None)
+    payload = salt + nonce + ciphertext
+    return base64.b64encode(payload).decode()
 
-    # Store salt + nonce + ciphertext together
-    return base64.b64encode(salt + nonce + ciphertext).decode()
-
-# Decrypt
-def decrypt(token: str):
-    global master_password
-    if not master_password:
-        raise ValueError("Master password is not set")
-
+def decrypt(token: str, key):
     raw = base64.b64decode(token)
-
     salt = raw[:16]
     nonce = raw[16:28]
     ciphertext = raw[28:]
-
-    key = derive_key(master_password, salt)
-
-    aesgcm = AESGCM(key)
+    key_for_aes = derive_key(key, salt)
+    aesgcm = AESGCM(key_for_aes)
     return aesgcm.decrypt(nonce, ciphertext, None).decode()
+# endregion
 
+# region Server Functions
+def create_user(username, password):
+    try:
+        res = requests.post(
+            "http://localhost:5000/create_user",
+            json={
+                'username': username, 
+                'password': password
+            }
+        )
 
-# Data Management Functions
-def write_entries():
-    encrypted_data = {name: {'username': encrypt(data['username']),
-                            'password': encrypt(data['password']),
-                            'url': encrypt(data['url'])} for name, data in entries.items()}
-    os.makedirs("./data", exist_ok=True)
-    with open("./data/passwords.json", "w") as f:
-        json.dump(encrypted_data, f)
+        if res.status_code == 200:
+            return base64.b64decode(res.json()['salt'])
+        else:
+            messagebox.showerror("Error", res.json()['error'])
+            return None
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+        return None
 
-def read_entries():
+def login_user(username, password):
+    try:
+        r = requests.post("http://localhost:5000/login",
+                          json={'username': username, 'password': password})
+        if r.status_code == 200:
+            data = r.json()
+
+            # Assuming server returns salt and session_id
+            salt = base64.b64decode(data['salt'])
+            key = derive_key(password, salt)
+            return key, data['session_id']
+        else:
+            messagebox.showerror("Login Failed", r.json()['error'])
+            return None, None
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+        return None, None
+
+def add_entry_to_server(name, username, password, url):
+    enc_user = encrypt(username, user_key)
+    enc_pass = encrypt(password, user_key)
+    try:
+        headers = {'Session-ID': session_id}
+        requests.post("http://localhost:5000/add_entry", json={
+            'name': name,
+            'username': enc_user,
+            'password': enc_pass,
+            'url': url
+        }, headers=headers)
+    except Exception as e:
+        print("Error saving entry:", e)
+
+def get_entries_from_server():
     global entries
     try:
-        with open("./data/passwords.json", "r") as f:
-            encrypt_data = json.load(f)
-            entries = {name: {'username': decrypt(data['username']),   
-                              'password': decrypt(data['password']), 
-                              'url': decrypt(data['url'])} for name, data in encrypt_data.items()}
-    except FileNotFoundError:
-        entries = {}
+        headers = {'Session-ID': session_id}
+        res = requests.get("http://localhost:5000/get_entries", headers=headers)
+        data = res.json()['entries']
+        decrypted_entries = {}
+        for name, entry in data.items():
+            decrypted_entries[name] = {
+                'username': decrypt(entry['username'], user_key),
+                'password': decrypt(entry['password'], user_key),
+                'url': entry.get('url', '')
+            }
+        entries = decrypted_entries
+    except Exception as e:
+        print("Error fetching entries:", e)
+# endregion
 
-def add_entry(name, username, password, url):
-    entries[name] = {'username': username, 'password': password, 'url': url}
-
-def get_entry(name):
-    return entries.get(name, None)
-
-def delete_entry():
-    selected = table.focus()
-    if selected:
-        del entries[selected]
-        table.delete(selected)
-        write_entries()
+# region GUI Functions
 
 def refresh_list():
-   for i in range (len(entries)):
-        entry = list(entries.keys())[i]
-        if not table.exists(entry):
-            data = entries[entry]
+    for row in table.get_children():
+        table.delete(row)
+    for i, (name, data) in enumerate(entries.items()):
+        tag = "evenrow" if i % 2 == 0 else "oddrow"
+        table.insert("", "end", iid=name, values=(name, data['username'], data['password'], data['url']), tags=(tag,))
 
-            if i % 2 == 0:
-                table.insert("", "end", iid=entry, values=(entry, data['username'], data['password'], data['url']), tags=("evenrow",))
-            else:
-                table.insert("", "end", iid=entry, values=(entry, data['username'], data['password'], data['url']), tags=("oddrow",))
-
-# Event Handlers
 def on_table_click(event):
     row_id = table.identify_row(event.y)
     col_id = table.identify_column(event.x)
@@ -144,117 +148,119 @@ def on_table_click(event):
         root.clipboard_append(password)
         print("Copied password:", password)
 
-# GUI Functions
-def open_add_window():
-    add_win = tk.Toplevel(root)
-    add_win.title("Add Entry")
-    add_win.geometry("300x260")
-    add_win.configure(bg=BG)
+def login_prompt():
+    global user_key, userId
+    prompt_win = tk.Tk()
+    prompt_win.title("Login")
+    prompt_win.geometry("400x250")
+    prompt_win.configure(bg=BG)
 
-    tk.Label(add_win, text="Name:", bg=BG, fg=FG).pack(pady=3)
-    name_e = tk.Entry(add_win, bg=BOX, fg=FG, insertbackground=FG)
-    name_e.pack()
-
-    tk.Label(add_win, text="Username:", bg=BG, fg=FG).pack(pady=3)
-    user_e = tk.Entry(add_win, bg=BOX, fg=FG, insertbackground=FG)
+    tk.Label(prompt_win, text="Username:", bg=BG, fg=FG).pack(pady=10)
+    user_e = tk.Entry(prompt_win, bg=BOX, fg=FG, insertbackground=FG)
     user_e.pack()
 
-    tk.Label(add_win, text="Password:", bg=BG, fg=FG).pack(pady=3)
-    pass_e = tk.Entry(add_win, bg=BOX, fg=FG, insertbackground=FG, show="*")
+    tk.Label(prompt_win, text="Password:", bg=BG, fg=FG).pack(pady=10)
+    pass_e = tk.Entry(prompt_win, bg=BOX, fg=FG, insertbackground=FG, show="*")
     pass_e.pack()
 
-    tk.Label(add_win, text="URL:", bg=BG, fg=FG).pack(pady=3)
-    url_e = tk.Entry(add_win, bg=BOX, fg=FG, insertbackground=FG)
-    url_e.pack()
+    def try_login():
+        username = user_e.get().strip()
+        password = pass_e.get().strip()
+        if not username or not password:
+            messagebox.showerror("Error", "Please fill all fields")
+            return
+        key, sid = login_user(username, password)
+        if key and sid:
+            global user_key, session_id
+            user_key = key
+            session_id = sid
+            prompt_win.destroy()
+    
+    def try_create():
+        username = user_e.get().strip()
+        password = pass_e.get().strip()
+        if not username or not password:
+            messagebox.showerror("Error", "Please fill all fields")
+            return
+        salt = create_user(username, password)
+        if salt:
+            messagebox.showinfo("Success", "User created! Please login now.")
+        else:
+            messagebox.showerror("Error", "Failed to create user")
+
+    tk.Button(prompt_win, text="Login", bg=ACCENT, fg=FG, command=try_login).pack(pady=20)
+    tk.Button(prompt_win, text="Create Account", bg=ACCENT, fg=FG, command=try_create).pack()
+    prompt_win.mainloop()
+
+def create_password_manager():
+    global root, table
+    root = tk.Tk()
+    root.title("🔒Password Manager")
+    root.geometry("900x600")
+    root.configure(bg=BG)
+
+    title_label = tk.Label(root, text="🔒 Password Manager", font=("Segoe UI", 16), bg=BG, fg=FG)
+    title_label.pack(pady=(10, 2))
+
+    # Frame Layout
+    main_frame = tk.Frame(root, bg=BG)
+    main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    left_frame = tk.Frame(main_frame, bg=BG, width=350)
+    left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0,15))
+
+    separator = tk.Frame(main_frame, bg="#444444", width=2)
+    separator.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10), pady=10)
+
+    right_frame = tk.Frame(main_frame, bg=BG)
+    right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+    # Add Entry Form (Left Frame)
+    form_title = tk.Label(left_frame, text="Add New Entry", font=("Segoe UI", 14), bg=BG, fg=FG)
+    form_title.pack(pady=(0,10))
+
+    tk.Label(left_frame, text="Name:", bg=BG, fg=FG, anchor="w").pack(fill=tk.X)
+    name_e = tk.Entry(left_frame, bg=BOX, fg=FG, insertbackground=FG)
+    name_e.pack(fill=tk.X, pady=(0,5))
+
+    tk.Label(left_frame, text="Username:", bg=BG, fg=FG, anchor="w").pack(fill=tk.X)
+    user_e = tk.Entry(left_frame, bg=BOX, fg=FG, insertbackground=FG)
+    user_e.pack(fill=tk.X, pady=(0,5))
+
+    tk.Label(left_frame, text="Password:", bg=BG, fg=FG, anchor="w").pack(fill=tk.X)
+    pass_e = tk.Entry(left_frame, bg=BOX, fg=FG, insertbackground=FG, show="*")
+    pass_e.pack(fill=tk.X, pady=(0,5))
+
+    tk.Label(left_frame, text="URL:", bg=BG, fg=FG, anchor="w").pack(fill=tk.X)
+    url_e = tk.Entry(left_frame, bg=BOX, fg=FG, insertbackground=FG)
+    url_e.pack(fill=tk.X, pady=(0,10))
 
     def save_entry():
         name = name_e.get().strip()
         username = user_e.get().strip()
         password = pass_e.get().strip()
         url = url_e.get().strip()
-
         if not name or not username or not password:
-            return 
-
-        add_entry(name, username, password, url)
+            messagebox.showerror("Error", "Name, Username, and Password are required")
+            return
+        add_entry_to_server(name, username, password, url)
+        entries[name] = {'username': username, 'password': password, 'url': url}
         refresh_list()
-        add_win.destroy()
+        # Clear form
+        name_e.delete(0, tk.END)
+        user_e.delete(0, tk.END)
+        pass_e.delete(0, tk.END)
+        url_e.delete(0, tk.END)
 
-    tk.Button(add_win, text="Save Entry", bg=ACCENT, fg=FG, command=save_entry).pack(pady=10)
+    save_btn = tk.Button(left_frame, text="Save Entry", bg=ACCENT, fg=FG, command=save_entry)
+    save_btn.pack(fill=tk.X)
 
-def password_prompt():
-    prompt_win = tk.Tk()
-    prompt_win.title("Enter Master Password")
-    prompt_win.geometry("300x150")
-    prompt_win.configure(bg=BG)
+    # Entries List (Right Frame)
+    list_title = tk.Label(right_frame, text="Saved Entries", font=("Segoe UI", 14), bg=BG, fg=FG)
+    list_title.pack(pady=(0,10))
 
-    tk.Label(prompt_win, text="Master Password:", bg=BG, fg=FG).pack(pady=10)
-    pass_e = tk.Entry(prompt_win, bg=BOX, fg=FG, insertbackground=FG, show="*")
-    pass_e.pack()
-
-    def check_password():
-        entered = pass_e.get().strip()
-        global verified, master_password
-        if verify_password(entered, hashed_password):
-            master_password = entered
-            verified = True
-            prompt_win.destroy()
-        else:
-            messagebox.showerror("Error", "Incorrect password")
-            print("Incorrect password")
-
-    tk.Button(prompt_win, text="Submit", bg=ACCENT, fg=FG, command=check_password).pack(pady=10)
-
-    prompt_win.mainloop()
-
-def create_master_password():
-    create_win = tk.Tk()
-    create_win.title("Create Master Password")
-    create_win.geometry("300x150")
-    create_win.configure(bg=BG)
-
-    tk.Label(create_win, text="Create Master Password:", bg=BG, fg=FG).pack(pady=10)
-    pass_e = tk.Entry(create_win, bg=BOX, fg=FG, insertbackground=FG, show="*")
-    pass_e.pack()
-
-    def save_master():
-        global hashed_password, master_password
-        entered = pass_e.get().strip()
-        if entered:
-            hashed_password = hash_password(entered)
-            master_password = entered
-            create_config(hashed_password)
-            create_win.destroy()
-
-    tk.Button(create_win, text="Create", bg=ACCENT, fg=FG, command=save_master).pack(pady=10)
-
-    create_win.mainloop()
-
-def create_password_manager():
-    global root, table #Make them accessible in other functions
-
-    root = tk.Tk()
-    root.title("Password Manager")
-    root.geometry("600x600")
-    root.configure(bg=BG)
-
-    top_frame = tk.Frame(root, bg=BG)
-    center_frame = tk.Frame(root, bg=BG)
-    bottom_frame = tk.Frame(root, bg=BG)
-
-    top_frame.pack(pady=10)
-    center_frame.pack(pady=10)
-    bottom_frame.pack(pady=10)
-
-    # Label Configurations
-    title_label = tk.Label(top_frame, text="🔒 Password Manager", font=("Segoe UI", 16), bg=BG, fg=FG)
-    title_label.pack()
-
-    list_label = tk.Label(center_frame, text="Saved Entries", bg=BG, fg=FG)
-    list_label.pack()
-
-    # Main Listing Configurations
-    table = ttk.Treeview(center_frame, columns=("Name", "Username", "Password", "URL"), show="headings", height=10)
+    table = ttk.Treeview(right_frame, columns=("Name","Username","Password","URL"), show="headings", height=15)
+    table.pack(fill=tk.BOTH, expand=True)
 
     style = ttk.Style()
     style.configure("Treeview", background=BOX, foreground=TABLE_FG, fieldbackground=BOX, rowheight=25)
@@ -276,35 +282,12 @@ def create_password_manager():
 
     table.bind("<Button-3>", on_table_click)
 
-    table.pack()
+# endregion
 
-    # Button Configurations
+# ---------------- Main ----------------
 
-    add_btn = tk.Button(root, text="Add Entry", bg=ACCENT, fg=FG, command=open_add_window)
-    add_btn.pack(pady=10, side=tk.LEFT, padx=20)
-
-    delete_btn = tk.Button(root, text="Delete Selected", bg=ACCENT, fg=FG, command=delete_entry)
-    delete_btn.pack(pady=5, side=tk.RIGHT, padx=20)
-
-# MAIN LOGIC
-if not os.path.exists("./data/config.json"):
-    create_master_password()
-
-with open("./data/config.json", "r") as f:
-    config = json.load(f)
-    hashed_password = config.get("hash-password", "")
-password_prompt()
-
-if verified:
-    create_password_manager()
-    try:
-        read_entries()
-        refresh_list()
-    except Exception as e:
-        print("Error loading entries:", e)
-
-    root.mainloop()
-    write_entries()
-    root.destroy()
-else:
-    root.destroy()
+login_prompt()
+get_entries_from_server()
+create_password_manager()
+refresh_list()
+root.mainloop()
