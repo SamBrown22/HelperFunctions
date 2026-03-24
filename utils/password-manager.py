@@ -118,10 +118,20 @@ def get_entries_from_server():
         entries = decrypted_entries
     except Exception as e:
         print("Error fetching entries:", e)
+
+def logout_user():
+    global session_id, user_key, entries
+    try:
+        headers = {'Session-ID': session_id}
+        requests.post("http://localhost:5000/logout", headers=headers)
+    except Exception as e:
+        print("Error during logout:", e)
+    session_id = None
+    user_key = None
+    entries = {}
 # endregion
 
 # region GUI Functions
-
 def refresh_list():
     for row in table.get_children():
         table.delete(row)
@@ -281,7 +291,6 @@ def create_password_manager():
     table.tag_configure("evenrow", background="#CDCDCD")
 
     table.bind("<Button-3>", on_table_click)
-
 # endregion
 
 # ---------------- Main ----------------
@@ -291,3 +300,4 @@ get_entries_from_server()
 create_password_manager()
 refresh_list()
 root.mainloop()
+logout_user()

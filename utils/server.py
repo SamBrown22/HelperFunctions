@@ -7,9 +7,9 @@ import sqlite3
 
 app = Flask(__name__)
 
-# SQLite DB setup
 DB_FILE = 'password_manager.db'
-
+   
+# region DB Management
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -36,13 +36,81 @@ def init_db():
     conn.commit()
     conn.close()
 
-init_db()
+def create_user_record(username, password_hash, salt):
+    user_id = str(uuid.uuid4())
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('INSERT INTO users (id, username, password_hash, salt) VALUES (?, ?, ?, ?)',
+              (user_id, username, password_hash, salt))
+    conn.commit()
+    conn.close()
+    return user_id
 
-# In-memory sessions for simplicity (could be DB too)
-sessions = {}
+def get_user_by_username(username):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('SELECT id, password_hash, salt FROM users WHERE username = ?', (username,))
+    user = c.fetchone()
+    conn.close()
+    return user
 
-# ---------------- USERS ----------------
+def create_session(user_id):
+    session_id = str(uuid.uuid4())
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('INSERT INTO sessions (session_id, user_id) VALUES (?, ?)', (session_id, user_id))
+    conn.commit()
+    conn.close()
+    return session_id
 
+def get_session_user_id(session_id):
+    if not session_id:
+        return None
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('SELECT user_id FROM sessions WHERE session_id = ?', (session_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def delete_session(session_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('DELETE FROM sessions WHERE session_id = ?', (session_id,))
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+    return deleted > 0
+
+def add_entry_for_user(user_id, name, username_enc, password_enc, url):
+    entry_id = str(uuid.uuid4())
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('INSERT INTO entries (id, user_id, name, username_enc, password_enc, url) VALUES (?, ?, ?, ?, ?, ?)',
+              (entry_id, user_id, name, username_enc, password_enc, url))
+    conn.commit()
+    conn.close()
+    return entry_id
+
+def get_entries_for_user(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('SELECT name, username_enc, password_enc, url FROM entries WHERE user_id = ?', (user_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def delete_entry_for_user(user_id, name):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('DELETE FROM entries WHERE user_id = ? AND name = ?', (user_id, name))
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+    return deleted > 0
+# endregion
+
+# region Authentication and User Management
 def hash_password(password):
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
@@ -55,23 +123,15 @@ def create_user():
     username = data['username']
     password = data['password']
 
-    connection = sqlite3.connect(DB_FILE)
-    c = connection.cursor()
-    c.execute('SELECT id FROM users WHERE username = ?', (username,))
-    if c.fetchone():
-        connection.close()
-        return jsonify({'error': 'User exists'}), 400
+    get_user_by_username(username)
+    if get_user_by_username(username):
+        return jsonify({'error': 'Username already exists'}), 400
 
     # Generate a random encryption salt for this user
     encryption_salt = os.urandom(16)
-    user_id = str(uuid.uuid4())
     password_hash = hash_password(password)
 
-    c.execute('INSERT INTO users (id, username, password_hash, salt) VALUES (?, ?, ?, ?)',
-              (user_id, username, password_hash, base64.b64encode(encryption_salt).decode()))
-    connection.commit()
-    connection.close()
-
+    create_user_record(username, password_hash, base64.b64encode(encryption_salt).decode())
     return jsonify({
         'message': 'User created',
         'salt': base64.b64encode(encryption_salt).decode()
@@ -83,20 +143,14 @@ def login():
     username = data['username']
     password = data['password']
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('SELECT id, password_hash, salt FROM users WHERE username = ?', (username,))
-    user = c.fetchone()
-    conn.close()
+    user = get_user_by_username(username)
+    if user:
+        user_id, password_hash, salt = user
 
-    if not user or not verify_password(password, user[1]):
+    if not user or not verify_password(password, password_hash):
         return jsonify({'error': 'Invalid credentials'}), 401
 
-    user_id, _, salt = user
-
-    # Create session
-    session_id = str(uuid.uuid4())
-    sessions[session_id] = user_id
+    session_id = create_session(user_id)
 
     return jsonify({
         'message': 'Login successful',
@@ -107,17 +161,25 @@ def login():
 @app.route('/logout', methods=['POST'])
 def logout():
     session_id = request.headers.get('Session-ID')
-    if session_id in sessions:
-        del sessions[session_id]
+    if not session_id:
+        return jsonify({'error': 'Invalid session'}), 401
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('DELETE FROM sessions WHERE session_id = ?', (session_id,))
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+
+    if deleted:
         return jsonify({'message': 'Logged out'})
     return jsonify({'error': 'Invalid session'}), 401
+# endregion
 
-# ---------------- ENTRIES ----------------
-
+# region PasswordManager API
 @app.route('/add_entry', methods=['POST'])
 def add_entry():
     session_id = request.headers.get('Session-ID')
-    user_id = sessions.get(session_id)
+    user_id = get_session_user_id(session_id)
     if not user_id:
         return jsonify({'error': 'Unauthorized'}), 401
 
@@ -127,27 +189,18 @@ def add_entry():
     password_enc = data['password']
     url = data.get('url', '')
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('INSERT INTO entries (id, user_id, name, username_enc, password_enc, url) VALUES (?, ?, ?, ?, ?, ?)',
-              (str(uuid.uuid4()), user_id, name, username_enc, password_enc, url))
-    conn.commit()
-    conn.close()
+    add_entry_for_user(user_id, name, username_enc, password_enc, url)
 
     return jsonify({'message': 'Saved'})
 
 @app.route('/get_entries', methods=['GET'])
 def get_entries():
     session_id = request.headers.get('Session-ID')
-    user_id = sessions.get(session_id)
+    user_id = get_session_user_id(session_id)
     if not user_id:
         return jsonify({'error': 'Unauthorized'}), 401
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('SELECT name, username_enc, password_enc, url FROM entries WHERE user_id = ?', (user_id,))
-    rows = c.fetchall()
-    conn.close()
+    rows = get_entries_for_user(user_id)
 
     entries = {row[0]: {'username': row[1], 'password': row[2], 'url': row[3]} for row in rows}
     return jsonify({'entries': entries})
@@ -155,7 +208,7 @@ def get_entries():
 @app.route('/delete_entry', methods=['DELETE'])
 def delete_entry():
     session_id = request.headers.get('Session-ID')
-    user_id = sessions.get(session_id)
+    user_id = get_session_user_id(session_id)
     if not user_id:
         return jsonify({'error': 'Unauthorized'}), 401
 
@@ -163,16 +216,15 @@ def delete_entry():
     if not name:
         return jsonify({'error': 'name required'}), 400
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('DELETE FROM entries WHERE user_id = ? AND name = ?', (user_id, name))
-    conn.commit()
-    conn.close()
+    delete_entry_for_user(user_id, name)
 
     return jsonify({'message': 'Deleted'})
+# endregion
 
-# ---------------- RUN ----------------
-
+# MAIN
 if __name__ == '__main__':
+    print("Initializing database...")
+    init_db()
+
     print("Starting secure password manager server...")
     app.run(debug=True)
